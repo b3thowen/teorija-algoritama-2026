@@ -1,29 +1,29 @@
 # autor: Ime Prezime INDEX raXXXX-20XX
 .section .data
-    ulaz_poruka: .ascii "Unesite string (proizvoljni karakteri, max 30, zavrsen sa Enter): \0"
-    ulaz_poruka_len = . - ulaz_poruka
+    input_msg: .ascii "Unesite string: \0"
+    input_msg_len = . - input_msg
 
-    izlaz_poruka: .ascii "Sortirani niz: \0"
+    izlaz_poruka: .ascii "Izlaz: \0"
     izlaz_poruka_len = . - izlaz_poruka
-
-    prazno_poruka: .ascii "(prazan unos - nema sta da se sortira)\0"
-    prazno_poruka_len = . - prazno_poruka
 
     novi_red: .byte 10
 
-    unos_max = 32
+    unos_max = 32                  # 30 slova + '\n' + rezerva
     unos: .fill unos_max, 1, 0
-    unos_len: .long 0        # duzina procitana preko sys_read
-    niz_duzina: .long 0      # stvarna duzina niza (bez Enter-a, unutar granica bafera)
+    unos_len: .long 0
+
+    izlaz_max = 31
+    izlaz: .fill izlaz_max, 1, 0
+    izlaz_len: .long 0
 
 .section .text
 .globl main
 main:
-    # 1. Ispis poruke (sys_write - $4)
+    # 1. Ispis poruke input_msg (sys_write - $4)
     movl $4, %eax
     movl $1, %ebx
-    movl $ulaz_poruka, %ecx
-    movl $ulaz_poruka_len, %edx
+    movl $input_msg, %ecx
+    movl $input_msg_len, %edx
     int $0x80
 
     # 2. Ucitavanje unosa (sys_read - $3)
@@ -34,95 +34,94 @@ main:
     int $0x80
     movl %eax, unos_len
 
-    # 3. Trazenje stvarne duzine niza - SA PROVEROM GRANICE BAFERA
-    #    (edge case: pun bafer bez '\n' na kraju - ne sme se citati van unos_max)
+    # 3. Postavljanje pokazivaca i pocetne duzine izlaza
+    movl $0, izlaz_len
     movl $unos, %esi
-    movl $0, %ecx
+    movl $0, %ecx           # brojac obradjenih karaktera - cuva granicu bafera
 
-trazenje_duzine:
+petlja:
+    # Edge case: zastita od prekoracenja bafera unos ako '\n' nedostaje
     cmpl $unos_max, %ecx
-    jge duzina_pronadjena       # dostignuta granica bafera - prekini pre citanja
+    jge kraj_unosa
+
     movb (%esi), %al
+
+    # Edge case: prazan unos / kraj unosa
     cmpb $10, %al
-    je duzina_pronadjena        # pronadjen kraj unosa (Enter)
+    je kraj_unosa
+
+    cmpb $'i', %al
+    je obrni
+
+    # dodavanje karaktera u izlazni bafer
+    movl izlaz_len, %edx
+    movl $izlaz, %edi
+    addl %edx, %edi
+    movb %al, (%edi)
+    incl %edx
+    movl %edx, izlaz_len
+
+    incl %esi
     incl %ecx
-    incl %esi
-    jmp trazenje_duzine
+    jmp petlja
 
-duzina_pronadjena:
-    movl %ecx, niz_duzina
+obrni:
+    movl izlaz_len, %edx     # broj karaktera trenutno u izlazu
 
-    # Edge case: prazan unos (duzina == 0) - preskoci sortiranje i stampanje niza
-    cmpl $0, niz_duzina
-    je prazan_unos
-
-    # Edge case: niz od tacno 1 karaktera - nema sta da se sortira
-    movl niz_duzina, %ecx
-    cmpl $2, %ecx
-    jl kraj_sortiranja
-
-    # 4. Bubble sort niza (unos[0] .. unos[niz_duzina-1])
-    decl %ecx                   # broj prolaza = duzina - 1
-
-spoljna_petlja:
-    cmpl $0, %ecx
-    je kraj_sortiranja
-
-    movl %ecx, %edx              # broj poredjenja u ovom prolazu
-    movl $unos, %esi              # pokazivac na pocetak niza
-
-unutrasnja_petlja:
+    # Edge case: 'i' nailazi kad je izlaz prazan (npr. hipoteticki pocetak) - preskoci obrtanje
     cmpl $0, %edx
-    je kraj_unutrasnje
+    je nastavi_posle_i
 
-    movb (%esi), %al
-    movb 1(%esi), %ah
-    cmpb %ah, %al
-    jbe bez_zamene
+    movl $0, %edx             # levi indeks
+    movl izlaz_len, %ebx
+    decl %ebx                  # desni indeks = duzina - 1
 
-    # zamena mesta susednih karaktera
-    movb %al, 1(%esi)
-    movb %ah, (%esi)
+rev_petlja:
+    cmpl %ebx, %edx
+    jge rev_kraj             # pokazivaci se sreli/presli - gotovo obrtanje
 
-bez_zamene:
+    movl $izlaz, %edi
+    addl %edx, %edi           # edi = &izlaz[levi]
+    movb (%edi), %al
+
+    movl $izlaz, %edi
+    addl %ebx, %edi           # edi = &izlaz[desni]  (koristimo isti pokazivac ponovo)
+    movb (%edi), %ah
+
+    movl $izlaz, %edi
+    addl %edx, %edi
+    movb %ah, (%edi)          # upisi desni karakter na levu poziciju
+
+    movl $izlaz, %edi
+    addl %ebx, %edi
+    movb %al, (%edi)          # upisi levi karakter na desnu poziciju
+
+    incl %edx
+    decl %ebx
+    jmp rev_petlja
+
+rev_kraj:
+nastavi_posle_i:
     incl %esi
-    decl %edx
-    jmp unutrasnja_petlja
+    incl %ecx
+    jmp petlja
 
-kraj_unutrasnje:
-    decl %ecx
-    jmp spoljna_petlja
-
-kraj_sortiranja:
-    # 5. Ispis poruke i sortiranog niza (sys_write - $4)
+kraj_unosa:
+    # 4. Ispis poruke "Izlaz: "
     movl $4, %eax
     movl $1, %ebx
     movl $izlaz_poruka, %ecx
     movl $izlaz_poruka_len, %edx
     int $0x80
 
+    # 5. Ispis obradjenog stringa (radi ispravno i kada je izlaz_len == 0)
     movl $4, %eax
     movl $1, %ebx
-    movl $unos, %ecx
-    movl niz_duzina, %edx
+    movl $izlaz, %ecx
+    movl izlaz_len, %edx
     int $0x80
 
-    movl $4, %eax
-    movl $1, %ebx
-    movl $novi_red, %ecx
-    movl $1, %edx
-    int $0x80
-
-    jmp kraj
-
-prazan_unos:
-    # Poseban ispis za edge case praznog unosa
-    movl $4, %eax
-    movl $1, %ebx
-    movl $prazno_poruka, %ecx
-    movl $prazno_poruka_len, %edx
-    int $0x80
-
+    # 6. Ispis novog reda
     movl $4, %eax
     movl $1, %ebx
     movl $novi_red, %ecx
@@ -130,7 +129,7 @@ prazan_unos:
     int $0x80
 
 kraj:
-    # 6. Izlaz iz programa (sys_exit - $1)
+    # 7. Izlaz iz programa (sys_exit - $1)
     movl $1, %eax
     movl $0, %ebx
     int $0x80
